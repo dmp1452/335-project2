@@ -2,16 +2,17 @@
 Member	Main responsibility	Specific tasks
 
 
-1: Dataset preparation	Download and preprocess the images	Prepare Pascal VOC and Caltech-256. Create the three sizes for each dataset while preserving classes and class balance. Build shared data loaders and keep evaluation data consistent across experiments. Document preprocessing.
+Danny 1: Dataset preparation	Download and preprocess the images	Prepare Pascal VOC and Caltech-256. Create the three sizes for each dataset while preserving classes and class balance. Build shared data loaders and keep evaluation data consistent across experiments. Document preprocessing.
 
 
-2: ResNet experiments	Implement and train ResNet	Set up a ResNet model, run its baseline initialization, then run the group’s proposed initialization. Test all six dataset versions and save training time, loss, and evaluation metrics per epoch.
+Matthew 2: ResNet experiments	Implement and train ResNet	Set up a ResNet model, run its baseline initialization, then run the group’s proposed initialization. Test all six dataset versions and save training time, loss, and evaluation metrics per epoch.
 
 
-3: ViT experiments	Implement and train ViT-base	Set up ViT-base and run the same baseline-versus-proposed-initialization experiments across all six dataset versions. Save results in the same format as Member 2.
+
+Shannon 3: ViT experiments	Implement and train ViT-base	Set up ViT-base and run the same baseline-versus-proposed-initialization experiments across all six dataset versions. Save results in the same format as Member 2.
 
 
-4: Weight initialization method	Research and implement the speedup approach	Find at least three related papers, explain the chosen method, and implement initialization code for both architectures. Coordinate with Members 2 and 3 and lead at least one tuning experiment, such as testing initialization scale.
+Asdaq 4: Weight initialization method	Research and implement the speedup approach	Find at least three related papers, explain the chosen method, and implement initialization code for both architectures. Coordinate with Members 2 and 3 and lead at least one tuning experiment, such as testing initialization scale.
 
 
-5: Evaluation and integration	Compare results and assemble the final submission	Define shared logging and evaluation functions early. Produce baseline-versus-method plots, compare training speed and predictive performance, organize the final Colab notebook, and verify that it runs from start to finish. Coordinate slides and recording.
+Yujin 5: Evaluation and integration	Compare results and assemble the final submission	Define shared logging and evaluation functions early. Produce baseline-versus-method plots, compare training speed and predictive performance, organize the final Colab notebook, and verify that it runs from start to finish. Coordinate slides and recording.
