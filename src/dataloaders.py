@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import DataLoader, Subset, Dataset
 from torchvision.datasets import Caltech256, VOCDetection
 
-from preprocessing import get_transform
+from .preprocessing import get_transform
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT_DIR / "data"
