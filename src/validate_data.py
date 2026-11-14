@@ -5,24 +5,28 @@ from collections import Counter
 
 from torchvision.datasets import Caltech256, VOCDetection
 
+if __package__:
+    from .dataset_metadata import (
+        CALTECH_CLASSES, SIZE_BYTES, VOC_CLASSES, caltech_image_path, duplicate_images,
+        voc_labels_from_xml,
+    )
+else:
+    from dataset_metadata import (
+        CALTECH_CLASSES, SIZE_BYTES, VOC_CLASSES, caltech_image_path, duplicate_images,
+        voc_labels_from_xml,
+    )
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 SPLIT_DIR = ROOT / "splits"
 
 SIZES = ["10mb", "100mb", "1gb"]
 
-VOC_CLASSES = [
-    "aeroplane", "bicycle", "bird", "boat", "bottle",
-    "bus", "car", "cat", "chair", "cow",
-    "diningtable", "dog", "horse", "motorbike",
-    "person", "pottedplant", "sheep", "sofa",
-    "train", "tvmonitor"
-]
-
-
 def load_indices(filename):
     with open(SPLIT_DIR / filename) as f:
-        return set(json.load(f))
+        indices = json.load(f)
+    assert len(set(indices)) == len(indices), f"Duplicate indices in {filename}"
+    return set(indices)
 
 
 def validate_caltech():
@@ -34,7 +38,22 @@ def validate_caltech():
     print("\n=== Caltech Validation ===")
 
     assert train.isdisjoint(test)
-    assert len(train | test) == len(dataset)
+    eligible = {i for i, label in enumerate(dataset.y) if label < CALTECH_CLASSES}
+    assert (train | test) <= eligible
+    duplicates = duplicate_images(
+        ((i, caltech_image_path(dataset, i)) for i in eligible - test),
+        (caltech_image_path(dataset, i) for i in test),
+    )
+    assert eligible - test - train == duplicates
+    assert train.isdisjoint(duplicates)
+    assert {dataset.y[i] for i in test} == set(range(CALTECH_CLASSES))
+    tune = load_indices("caltech_tune.json")
+    assert tune <= train and tune.isdisjoint(load_indices("caltech_10mb.json"))
+    assert {dataset.y[i] for i in tune} == set(range(CALTECH_CLASSES))
+    assert not duplicate_images(
+        ((i, caltech_image_path(dataset, i)) for i in tune),
+        (caltech_image_path(dataset, i) for i in load_indices("caltech_10mb.json")),
+    )
 
     previous = set()
 
@@ -47,7 +66,9 @@ def validate_caltech():
         assert previous <= indices
 
         counts = Counter(dataset.y[i] for i in indices)
-        assert len(counts) == 257
+        assert len(counts) == CALTECH_CLASSES
+        total_bytes = sum(caltech_image_path(dataset, i).stat().st_size for i in indices)
+        assert total_bytes <= SIZE_BYTES[size]
 
         max_difference = max(
             abs(
@@ -59,7 +80,7 @@ def validate_caltech():
 
         print(
             f"{size}: {len(indices)} images, "
-            f"257 classes, "
+            f"{CALTECH_CLASSES} classes, {total_bytes:,}/{SIZE_BYTES[size]:,} JPEG bytes, "
             f"max class proportion difference: "
             f"{max_difference:.4f}"
         )
@@ -67,19 +88,6 @@ def validate_caltech():
         previous = indices
 
     print("Caltech validation passed.")
-
-
-def extract_voc_labels(annotation):
-    objects = annotation["annotation"].get("object", [])
-
-    if isinstance(objects, dict):
-        objects = [objects]
-
-    return {
-        obj["name"]
-        for obj in objects
-        if obj["name"] in VOC_CLASSES
-    }
 
 
 def validate_voc():
@@ -90,12 +98,20 @@ def validate_voc():
         download=False
     )
 
+    val = VOCDetection(root=str(DATA_DIR), year="2012", image_set="val")
+    assert set(dataset.images).isdisjoint(val.images)
+    assert not duplicate_images(enumerate(dataset.images), val.images)
     print("\n=== Pascal VOC Validation ===")
 
-    labels = {}
-    for i in range(len(dataset)):
-        _, annotation = dataset[i]
-        labels[i] = extract_voc_labels(annotation)
+    labels = {i: voc_labels_from_xml(path) for i, path in enumerate(dataset.annotations)}
+    assert set().union(*(voc_labels_from_xml(path) for path in val.annotations)) == set(VOC_CLASSES)
+    tune = load_indices("voc_tune.json")
+    assert tune <= labels.keys() and tune.isdisjoint(load_indices("voc_10mb.json"))
+    assert set().union(*(labels[i] for i in tune)) == set(VOC_CLASSES)
+    assert not duplicate_images(
+        ((i, dataset.images[i]) for i in tune),
+        (dataset.images[i] for i in load_indices("voc_10mb.json")),
+    )
 
     original_counts = Counter()
     for image_labels in labels.values():
@@ -113,7 +129,9 @@ def validate_voc():
         for i in indices:
             counts.update(labels[i])
 
-        assert len(counts) == 20
+        assert len(counts) == len(VOC_CLASSES)
+        total_bytes = sum(Path(dataset.images[i]).stat().st_size for i in indices)
+        assert total_bytes <= SIZE_BYTES[size]
 
         max_difference = max(
             abs(
@@ -125,7 +143,7 @@ def validate_voc():
 
         print(
             f"{size}: {len(indices)} images, "
-            f"20 classes, "
+            f"{len(VOC_CLASSES)} classes, {total_bytes:,}/{SIZE_BYTES[size]:,} JPEG bytes, "
             f"max class frequency difference: "
             f"{max_difference:.4f}"
         )
