@@ -5,8 +5,6 @@ from pathlib import Path
 from collections import defaultdict, Counter
 from torchvision.datasets import VOCDetection
 
-import numpy as np
-
 from torchvision.datasets import Caltech256
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -15,14 +13,16 @@ SPLIT_DIR = Path(__file__).resolve().parent.parent / "splits"
 SEED = 42
 TRAIN_RATIO = 0.8
 
-VOC_CLASSES = [
-    "aeroplane", "bicycle", "bird", "boat", "bottle",
-    "bus", "car", "cat", "chair", "cow",
-    "diningtable", "dog", "horse", "motorbike",
-    "person", "pottedplant", "sheep", "sofa",
-    "train", "tvmonitor"
-]
-
+if __package__:
+    from .dataset_metadata import (
+        CALTECH_CLASSES, SIZE_BYTES, VOC_CLASSES, caltech_image_path, duplicate_images,
+        voc_labels_from_xml,
+    )
+else:
+    from dataset_metadata import (
+        CALTECH_CLASSES, SIZE_BYTES, VOC_CLASSES, caltech_image_path, duplicate_images,
+        voc_labels_from_xml,
+    )
 
 
 def create_voc_subsets():
@@ -40,17 +40,7 @@ def create_voc_subsets():
 
     # Read image labels and file sizes
     for index in range(len(dataset)):
-        _, annotation = dataset[index]
-
-        objects = annotation["annotation"].get("object", [])
-        if isinstance(objects, dict):
-            objects = [objects]
-
-        image_labels[index] = {
-            obj["name"] for obj in objects
-            if obj["name"] in VOC_CLASSES
-        }
-
+        image_labels[index] = voc_labels_from_xml(dataset.annotations[index])
         image_sizes[index] = Path(dataset.images[index]).stat().st_size
 
     # Calculate original class frequencies
@@ -64,14 +54,14 @@ def create_voc_subsets():
         for c in VOC_CLASSES
     }
 
-    def select_subset(target_bytes, required_indices=None, trials=300):
+    def select_subset(target_bytes, required_indices=(), excluded_indices=(), trials=300):
         """
         Randomly sample candidate subsets and select the one
         whose class frequencies most closely match the original.
         """
-        required_indices = set(required_indices or [])
+        required_indices = set(required_indices)
         all_indices = set(range(len(dataset)))
-        remaining = sorted(all_indices - required_indices)
+        remaining = sorted(all_indices - required_indices - set(excluded_indices))
 
         best_subset = None
         best_score = float("inf")
@@ -117,16 +107,24 @@ def create_voc_subsets():
 
     # Select 10 MB, then expand it to 100 MB
     # This ensures the subsets are nested
-    subset_10mb = select_subset(10_000_000, trials=1000)
+    subset_10mb = select_subset(SIZE_BYTES["10mb"], trials=1000)
 
     subset_100mb = select_subset(
-        100_000_000,
+        SIZE_BYTES["100mb"],
         required_indices=subset_10mb,
         trials=500
     )
 
-    # Use the entire training set for the largest version
     subset_1gb = list(range(len(dataset)))
+    if sum(image_sizes.values()) > SIZE_BYTES["1gb"]:
+        subset_1gb = select_subset(SIZE_BYTES["1gb"], required_indices=subset_100mb, trials=50)
+
+    set_10mb = set(subset_10mb)
+    duplicates = duplicate_images(
+        ((i, path) for i, path in enumerate(dataset.images) if i not in set_10mb),
+        (dataset.images[i] for i in subset_10mb),
+    )
+    tune_indices = select_subset(20_000_000, excluded_indices=set_10mb | duplicates, trials=500)
 
     subsets = {
         "10mb": subset_10mb,
@@ -135,6 +133,9 @@ def create_voc_subsets():
     }
 
     SPLIT_DIR.mkdir(parents=True, exist_ok=True)
+
+    with open(SPLIT_DIR / "voc_tune.json", "w") as f:
+        json.dump(tune_indices, f, indent=2)
 
     for name, indices in subsets.items():
         with open(SPLIT_DIR / f"voc_{name}.json", "w") as f:
@@ -172,7 +173,8 @@ def create_caltech_split():
     class_indices = defaultdict(list)
 
     for index, label in enumerate(dataset.y):
-        class_indices[label].append(index)
+        if label < CALTECH_CLASSES:  # The last category is clutter.
+            class_indices[label].append(index)
 
     rng = random.Random(SEED)
 
@@ -187,6 +189,12 @@ def create_caltech_split():
 
         train_indices.extend(indices[:split_point])
         test_indices.extend(indices[split_point:])
+
+    duplicates = duplicate_images(
+        ((i, caltech_image_path(dataset, i)) for i in train_indices),
+        (caltech_image_path(dataset, i) for i in test_indices),
+    )
+    train_indices = [i for i in train_indices if i not in duplicates]
 
     # Save reproducible splits
     SPLIT_DIR.mkdir(parents=True, exist_ok=True)
@@ -205,12 +213,15 @@ def create_caltech_split():
     print(f"Total images: {len(dataset)}")
     print(f"Training images: {len(train_indices)}")
     print(f"Evaluation images: {len(test_indices)}")
+    print(f"Train images removed as exact holdout duplicates: {len(duplicates)}")
     print(f"Classes in training: {len(train_counts)}")
     print(f"Classes in evaluation: {len(test_counts)}")
 
     assert set(train_indices).isdisjoint(test_indices)
-    assert len(train_indices) + len(test_indices) == len(dataset)
-    assert len(train_counts) == len(test_counts) == 257
+    assert len(train_indices) + len(test_indices) + len(duplicates) == sum(
+        y < CALTECH_CLASSES for y in dataset.y
+    )
+    assert len(train_counts) == len(test_counts) == CALTECH_CLASSES
 
     print("All split checks passed.")
 
@@ -230,12 +241,7 @@ def inspect_caltech_sizes():
     for index in train_indices:
         label = dataset.y[index]
 
-        image_path = (
-            Path(dataset.root)
-            / "256_ObjectCategories"
-            / dataset.categories[label]
-            / f"{label + 1:03d}_{dataset.index[index]:04d}.jpg"
-        )
+        image_path = caltech_image_path(dataset, index)
 
         size = image_path.stat().st_size
         total_bytes += size
@@ -284,18 +290,23 @@ def create_caltech_subsets():
     for index in train_indices:
         label = dataset.y[index]
 
-        image_path = (
-            Path(dataset.root)
-            / "256_ObjectCategories"
-            / dataset.categories[label]
-            / f"{label + 1:03d}_{dataset.index[index]:04d}.jpg"
-        )
+        image_path = caltech_image_path(dataset, index)
 
         class_indices[label].append(index)
         image_sizes[index] = image_path.stat().st_size
 
     for indices in class_indices.values():
         rng.shuffle(indices)
+
+    # Guarantee that the mandatory first image from every class fits.
+    first_bytes = sum(image_sizes[indices[0]] for indices in class_indices.values())
+    if first_bytes > SIZE_BYTES["10mb"]:
+        for indices in class_indices.values():
+            smallest = min(range(len(indices)), key=lambda pos: image_sizes[indices[pos]])
+            indices[0], indices[smallest] = indices[smallest], indices[0]
+        minimum = sum(image_sizes[indices[0]] for indices in class_indices.values())
+        if minimum > SIZE_BYTES["10mb"]:
+            raise RuntimeError(f"Caltech class coverage requires at least {minimum} JPEG bytes")
 
     ordered_indices = []
 
@@ -328,39 +339,40 @@ def create_caltech_subsets():
         ordered_indices.append(index)
         selected_counts[label] += 1
 
-    targets = {
-        "10mb": 10_000_000,
-        "100mb": 100_000_000,
-        "1gb": float("inf")
-    }
-
-    for name, target_bytes in targets.items():
-        selected = []
-        total_bytes = 0
-
+    selected = set()
+    total_bytes = 0
+    for name, target_bytes in SIZE_BYTES.items():
         for index in ordered_indices:
-            size = image_sizes[index]
+            if index not in selected and total_bytes + image_sizes[index] <= target_bytes:
+                selected.add(index)
+                total_bytes += image_sizes[index]
 
-            if total_bytes + size > target_bytes:
-                if name != "1gb":
-                    continue
-
-            selected.append(index)
-            total_bytes += size
-
-        selected = sorted(selected)
+        if name == "10mb":
+            duplicates = duplicate_images(
+                ((i, caltech_image_path(dataset, i)) for i in train_indices if i not in selected),
+                (caltech_image_path(dataset, i) for i in selected),
+            )
+            tune_indices = []
+            for indices in class_indices.values():
+                remaining = [i for i in indices if i not in selected and i not in duplicates]
+                if len(remaining) < 2:
+                    raise RuntimeError("Caltech tuning requires two unused training images per class")
+                tune_indices.extend(remaining[:2])
+            with open(SPLIT_DIR / "caltech_tune.json", "w") as f:
+                json.dump(sorted(tune_indices), f, indent=2)
 
         with open(SPLIT_DIR / f"caltech_{name}.json", "w") as f:
-            json.dump(selected, f, indent=2)
+            json.dump(sorted(selected), f, indent=2)
 
         counts = Counter(dataset.y[i] for i in selected)
 
-        assert not set(selected).intersection(test_indices)
+        assert selected.isdisjoint(test_indices)
+        assert len(counts) == CALTECH_CLASSES
 
         print(f"\n=== Caltech {name} ===")
         print(f"Images: {len(selected)}")
         print(f"Size: {total_bytes / 1_000_000:.2f} MB")
-        print(f"Classes represented: {len(counts)}/257")
+        print(f"Classes represented: {len(counts)}/{CALTECH_CLASSES}")
 
 
 if __name__ == "__main__":

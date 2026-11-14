@@ -7,18 +7,11 @@ from torch.utils.data import DataLoader, Subset, Dataset
 from torchvision.datasets import Caltech256, VOCDetection
 
 from .preprocessing import get_transform
+from .dataset_metadata import CALTECH_CLASSES, VOC_CLASSES
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT_DIR / "data"
 SPLIT_DIR = ROOT_DIR / "splits"
-
-VOC_CLASSES = [
-    "aeroplane", "bicycle", "bird", "boat", "bottle",
-    "bus", "car", "cat", "chair", "cow",
-    "diningtable", "dog", "horse", "motorbike",
-    "person", "pottedplant", "sheep", "sofa",
-    "train", "tvmonitor"
-]
 
 VOC_CLASS_TO_INDEX = {
     name: index for index, name in enumerate(VOC_CLASSES)
@@ -62,7 +55,15 @@ def load_indices(filename):
         return json.load(f)
 
 
-def get_dataloaders(dataset_name, size, batch_size=32, num_workers=0):
+def caltech_indices(dataset, filename):
+    # Starter manifests may still list the last (clutter) folder.
+    return [i for i in load_indices(filename) if dataset.y[i] < CALTECH_CLASSES]
+
+
+def get_dataloaders(
+    dataset_name, size, batch_size=32, num_workers=0, *,
+    seed=None, pin_memory=False, tuning=False,
+):
     """
     Return training and evaluation DataLoaders.
 
@@ -72,6 +73,9 @@ def get_dataloaders(dataset_name, size, batch_size=32, num_workers=0):
 
     if size not in {"10mb", "100mb", "1gb"}:
         raise ValueError("Size must be 10mb, 100mb, or 1gb")
+
+    if tuning and size != "10mb":
+        raise ValueError("The tuning holdout is defined for the 10 MB subset")
 
     transform = get_transform()
 
@@ -84,12 +88,12 @@ def get_dataloaders(dataset_name, size, batch_size=32, num_workers=0):
 
         train = Subset(
             dataset,
-            load_indices(f"caltech_{size}.json")
+            caltech_indices(dataset, f"caltech_{size}.json")
         )
 
         val = Subset(
             dataset,
-            load_indices("caltech_test.json")
+            caltech_indices(dataset, "caltech_tune.json" if tuning else "caltech_test.json")
         )
 
     elif dataset_name == "voc":
@@ -102,25 +106,32 @@ def get_dataloaders(dataset_name, size, batch_size=32, num_workers=0):
             load_indices(f"voc_{size}.json")
         )
 
-        val = VOCClassification(
-            DATA_DIR, "val", transform
-        )
+        if tuning:
+            val = Subset(train_dataset, load_indices("voc_tune.json"))
+        else:
+            val = VOCClassification(DATA_DIR, "val", transform)
 
     else:
         raise ValueError("Dataset must be 'caltech' or 'voc'")
+
+    if tuning and not set(train.indices).isdisjoint(val.indices):
+        raise ValueError("Tuning holdout overlaps the training subset. Regenerate splits.")
 
     train_loader = DataLoader(
         train,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=num_workers
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        generator=None if seed is None else torch.Generator().manual_seed(seed)
     )
 
     val_loader = DataLoader(
         val,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers
+        num_workers=num_workers,
+        pin_memory=pin_memory
     )
 
     return train_loader, val_loader

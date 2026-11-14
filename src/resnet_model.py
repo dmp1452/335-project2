@@ -14,7 +14,7 @@ def build_resnet(dataset_name, initializer=None):
         A ResNet-18 model initialized for the given dataset.
     """
     if dataset_name == "caltech":
-        num_classes = 257
+        num_classes = 256
     elif dataset_name == "voc":
         num_classes = 20
     else:
@@ -25,7 +25,6 @@ def build_resnet(dataset_name, initializer=None):
     model.fc = nn.Linear(model.fc.in_features, num_classes)
 
     if initializer is not None:
-        # whoever is doing part 4 will implement the initializer function. This is a placeholder
         initializer(model)
 
     return model

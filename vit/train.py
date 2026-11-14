@@ -1,5 +1,6 @@
 import torch
 import time
+from src.resnet_training import synchronize_device
 from sklearn.metrics import precision_score, recall_score, f1_score
 import matplotlib.pyplot as plt
 
@@ -24,8 +25,8 @@ def train_model(dataset_name, size, model, train_loader, val_loader, epochs = 1)
         lr = 1e-4
     )
 
-    scaler = torch.cuda.amp.GradScaler(
-        enabled = (device.type == device.type)
+    scaler = torch.amp.GradScaler(
+        "cuda", enabled = (device.type == "cuda")
     )
 
     for epoch in range(epochs):
@@ -67,6 +68,7 @@ def train_model(dataset_name, size, model, train_loader, val_loader, epochs = 1)
                 total += labels.size(0)
             else:
                 total += labels.numel()
+        synchronize_device(device)
         train_time = time.perf_counter() - train_start
         train_loss = total_loss / len(train_loader.dataset)
         if dataset_name == "caltech":
@@ -106,6 +108,7 @@ def train_model(dataset_name, size, model, train_loader, val_loader, epochs = 1)
 
                 if dataset_name == "caltech":
                     val_total += labels.size(0)
+            synchronize_device(device)
             val_time = time.perf_counter() - val_start
 
             if dataset_name == "caltech":

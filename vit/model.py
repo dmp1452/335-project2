@@ -1,8 +1,8 @@
 import timm
 
-def create_model(dataset_name):
+def create_model(dataset_name, initializer=None):
     if dataset_name == "caltech":
-        num_classes = 257
+        num_classes = 256
     elif dataset_name == "voc":
         num_classes = 20
     else:
@@ -12,4 +12,6 @@ def create_model(dataset_name):
         pretrained = False,
         num_classes = num_classes
     )
+    if initializer is not None:
+        initializer(model)
     return model
